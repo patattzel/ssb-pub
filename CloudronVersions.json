@@ -1,0 +1,56 @@
+{
+    "stable": true,
+    "versions": {
+        "0.1.0": {
+            "manifest": {
+                "id": "io.ssbc.ssb-pub",
+                "title": "SSB Pub",
+                "tagline": "Scuttlebutt feed replication for Manyverse",
+                "description": "Run an invite-only Scuttlebutt Pub. It stores and replicates feeds and blobs using ssb-db2 and EBT.",
+                "version": "0.1.0",
+                "upstreamVersion": "8.1.0",
+                "minBoxVersion": "10.0.0",
+                "manifestVersion": 2,
+                "healthCheckPath": "/healthz",
+                "httpPort": 3000,
+                "tcpPorts": {
+                    "SSB_PORT": {
+                        "title": "Direct SSB TCP (optional)",
+                        "description": "Use direct TCP when your Pub DNS name resolves directly to Cloudron. With this port disabled, invites use secure WebSockets on HTTPS.",
+                        "containerPort": 8008,
+                        "defaultValue": 8008,
+                        "enabledByDefault": false
+                    }
+                },
+                "addons": {
+                    "localstorage": {
+                        "sqlite": {
+                            "paths": [
+                                "/app/data/ssb-pub/invites.sqlite"
+                            ]
+                        }
+                    }
+                },
+                "website": "https://scuttlebutt.nz/",
+                "changelog": "First release with invitation links, classic feed and blob replication, secure WebSockets and optional direct TCP.",
+                "postInstallMessage": "Open the app’s **Web Terminal** and run `/app/code/pubctl invite`. Paste the HTTPS link into Manyverse under **Connections → Paste invite code**. Each link can enroll one SSB identity.",
+                "tags": [
+                    "sync",
+                    "hosting"
+                ],
+                "packageUrl": "https://github.com/patattzel/ssb-pub",
+                "documentationUrl": "https://github.com/patattzel/ssb-pub#cloudron-10",
+                "packagerName": "patattzel",
+                "packagerUrl": "https://github.com/patattzel",
+                "iconUrl": "https://raw.githubusercontent.com/patattzel/ssb-pub/main/assets/icon.png",
+                "mediaLinks": [
+                    "https://raw.githubusercontent.com/patattzel/ssb-pub/main/assets/invite.png"
+                ],
+                "dockerImage": "ghcr.io/patattzel/ssb-pub@sha256:b04c3dfbb4e72e8ce83f2f073332263f26e6edae256980097352d078c9f511bf"
+            },
+            "creationDate": "Sat, 14 Nov 2026 21:10:16 GMT",
+            "ts": "Sat, 14 Nov 2026 21:10:16 GMT",
+            "publishState": "published"
+        }
+    }
+}

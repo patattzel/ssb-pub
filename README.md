@@ -39,26 +39,31 @@ The invitation remains an HTTPS link and Manyverse then connects via the adverti
 
 ## Cloudron 10+
 
-The [Cloudron manifest](CloudronManifest.json) defaults to WebSockets over HTTPS. For a source installation, build the image on Docker, push it to a registry Cloudron can pull from, then install it using the Cloudron CLI from this directory. Substitute your registry reference and domains in these commands.
+In Cloudron, open **App Store → Add custom app → Community app** and paste the [SSB Pub install URL](https://raw.githubusercontent.com/patattzel/ssb-pub/main/CloudronVersions.json).
+
+```text
+https://raw.githubusercontent.com/patattzel/ssb-pub/main/CloudronVersions.json
+```
+
+Choose a domain. The [Cloudron manifest](CloudronManifest.json) defaults to WebSockets over HTTPS. For a CLI installation, substitute your Cloudron and app domains:
 
 ```sh
-docker buildx build --platform linux/amd64 --push -t registry.example.com/ssb-pub:0.1.0 .
 cloudron login my.example.com
-cloudron install --location pub.example.com --port-bindings SSB_PORT=x --image registry.example.com/ssb-pub:0.1.0
+cloudron install --location pub.example.com --port-bindings SSB_PORT=x --versions-url https://raw.githubusercontent.com/patattzel/ssb-pub/main/CloudronVersions.json
 ```
 
 In the app’s **Web Terminal**, run `/app/code/pubctl invite`. For TCP, enable the **Direct SSB TCP** port on Cloudron or install with `--port-bindings SSB_PORT=18008` using a free port. Use a DNS-only record for a TCP endpoint behind Cloudflare.
 
 ### Publish a Community App
 
-For the first release, run `cloudron versions init` and fill in the public app icon URL, screenshot URL, packager name and packager URL in the manifest. A matching `cloudron-v<version>` Git tag triggers the image build, container checks and push to GHCR. Make the package publicly pullable, then add the published image by digest to the catalog and publish the catalog over HTTPS.
+Update the version and changelog in `CloudronManifest.json`. A matching `cloudron-v<version>` Git tag triggers the image build, container checks and push to GitHub Container Registry. Verify public pull access and add the new image to the catalog by digest:
 
 ```sh
-cloudron versions add --image ghcr.io/OWNER/ssb-pub@sha256:DIGEST
+cloudron versions add --image ghcr.io/patattzel/ssb-pub@sha256:DIGEST
 cloudron versions verify
 ```
 
-Use the published `CloudronVersions.json` URL under **App Store → Add custom app → Community app**. This checkout is a local source release.
+Commit and push the updated `CloudronVersions.json` to `main`.
 
 ## Data and backups
 
