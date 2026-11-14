@@ -105,6 +105,60 @@
             "creationDate": "Sat, 14 Nov 2026 21:32:48 GMT",
             "ts": "Sat, 14 Nov 2026 21:32:48 GMT",
             "publishState": "published"
+        },
+        "0.2.1": {
+            "manifest": {
+                "id": "io.ssbc.ssb-pub",
+                "title": "SSB Pub",
+                "tagline": "Scuttlebutt feed replication for Manyverse",
+                "description": "Run an invite-only Scuttlebutt Pub. It stores and replicates feeds and blobs using ssb-db2 and EBT.",
+                "version": "0.2.1",
+                "upstreamVersion": "8.1.0",
+                "minBoxVersion": "10.0.0",
+                "manifestVersion": 2,
+                "healthCheckPath": "/healthz",
+                "httpPort": 3000,
+                "tcpPorts": {
+                    "SSB_PORT": {
+                        "title": "Direct SSB TCP (optional)",
+                        "description": "Use direct TCP when your Pub DNS name resolves directly to Cloudron. With this port disabled, invites use secure WebSockets on HTTPS.",
+                        "containerPort": 8008,
+                        "defaultValue": 8008,
+                        "enabledByDefault": false
+                    }
+                },
+                "addons": {
+                    "localstorage": {
+                        "sqlite": {
+                            "paths": [
+                                "/app/data/ssb-pub/invites.sqlite",
+                                "/app/data/ssb-pub/admin.sqlite"
+                            ]
+                        }
+                    }
+                },
+                "website": "https://scuttlebutt.nz/",
+                "changelog": "Fix Cloudron SQLite backups and restore database ownership at startup. Includes the web admin dashboard and Manyverse sign-in from 0.2.0.",
+                "postInstallMessage": "Open the app’s **Web Terminal** and run `/app/code/pubctl admin`. Paste your public Manyverse SSB ID. Open the app, choose **Admin sign-in**, and approve with Manyverse. The **Pub settings** page lets you edit the profile and create invitations. For a password fallback, run `/app/code/pubctl password` in the Web Terminal.",
+                "tags": [
+                    "sync",
+                    "hosting"
+                ],
+                "packageUrl": "https://github.com/patattzel/ssb-pub",
+                "documentationUrl": "https://github.com/patattzel/ssb-pub#cloudron-10",
+                "packagerName": "patattzel",
+                "packagerUrl": "https://github.com/patattzel",
+                "iconUrl": "https://raw.githubusercontent.com/patattzel/ssb-pub/main/assets/icon.png",
+                "mediaLinks": [
+                    "https://raw.githubusercontent.com/patattzel/ssb-pub/cloudron-v0.2.0/assets/pub-invite.png",
+                    "https://raw.githubusercontent.com/patattzel/ssb-pub/cloudron-v0.2.0/assets/pub-admin.png"
+                ],
+                "configurePath": "/admin",
+                "dockerImage": "ghcr.io/patattzel/ssb-pub@sha256:cdefba30f1efd2daf6895acb358c763e72df953c4cde8c11556c2c43a0bfa03e"
+            },
+            "creationDate": "Sat, 14 Nov 2026 22:03:55 GMT",
+            "ts": "Sat, 14 Nov 2026 22:03:55 GMT",
+            "publishState": "published"
         }
     }
 }
