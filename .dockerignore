@@ -1,0 +1,10 @@
+**
+!package.json
+!package-lock.json
+!config.js
+!invites.js
+!peer.js
+!server.js
+!pubctl.js
+!pubctl
+!start.sh

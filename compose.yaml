@@ -1,0 +1,21 @@
+services:
+  pub:
+    build: .
+    restart: unless-stopped
+    read_only: true
+    stop_grace_period: 20s
+    environment:
+      PUB_URL: "${PUB_URL:-http://127.0.0.1:3000}"
+    ports:
+      - "127.0.0.1:3000:3000"
+    tmpfs:
+      - /run
+      - /tmp
+    volumes:
+      - pub-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => process.exit(r.status === 204 ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      start_period: 20s
+volumes:
+  pub-data:

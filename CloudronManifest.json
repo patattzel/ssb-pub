@@ -1,0 +1,32 @@
+{
+  "id": "io.ssbc.ssb-pub",
+  "title": "SSB Pub",
+  "tagline": "Scuttlebutt feed replication for Manyverse",
+  "description": "Run an invite-only Scuttlebutt Pub. It stores and replicates feeds and blobs using ssb-db2 and EBT.",
+  "version": "0.1.0",
+  "upstreamVersion": "8.1.0",
+  "minBoxVersion": "10.0.0",
+  "manifestVersion": 2,
+  "healthCheckPath": "/healthz",
+  "httpPort": 3000,
+  "tcpPorts": {
+    "SSB_PORT": {
+      "title": "Direct SSB TCP (optional)",
+      "description": "Use direct TCP when your Pub DNS name resolves directly to Cloudron. With this port disabled, invites use secure WebSockets on HTTPS.",
+      "containerPort": 8008,
+      "defaultValue": 8008,
+      "enabledByDefault": false
+    }
+  },
+  "addons": {
+    "localstorage": {
+      "sqlite": {
+        "paths": ["/app/data/ssb-pub/invites.sqlite"]
+      }
+    }
+  },
+  "website": "https://scuttlebutt.nz/",
+  "changelog": "First release with invitation links, classic feed and blob replication, secure WebSockets and optional direct TCP.",
+  "postInstallMessage": "Open the app’s **Web Terminal** and run `/app/code/pubctl invite`. Paste the HTTPS link into Manyverse under **Connections → Paste invite code**. Each link can enroll one SSB identity.",
+  "tags": ["sync", "hosting"]
+}

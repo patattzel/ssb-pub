@@ -1,0 +1,6 @@
+services:
+  pub:
+    environment:
+      SSB_PORT: "${SSB_PORT:-8008}"
+    ports:
+      - "${SSB_PORT:-8008}:8008"

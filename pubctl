@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+export PUB_ADMIN_SOCKET=/run/ssb-pub/admin.sock
+exec node /app/code/pubctl.js "$@"
