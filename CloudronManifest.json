@@ -3,7 +3,7 @@
   "title": "SSB Pub",
   "tagline": "Scuttlebutt feed replication for Manyverse",
   "description": "Run an invite-only Scuttlebutt Pub. It stores and replicates feeds and blobs using ssb-db2 and EBT.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "upstreamVersion": "8.1.0",
   "minBoxVersion": "10.0.0",
   "manifestVersion": 2,
@@ -22,14 +22,15 @@
     "localstorage": {
       "sqlite": {
         "paths": [
-          "/app/data/ssb-pub/invites.sqlite"
+          "/app/data/ssb-pub/invites.sqlite",
+          "/app/data/ssb-pub/admin.sqlite"
         ]
       }
     }
   },
   "website": "https://scuttlebutt.nz/",
-  "changelog": "First release with invitation links, classic feed and blob replication, secure WebSockets and optional direct TCP.",
-  "postInstallMessage": "Open the app’s **Web Terminal** and run `/app/code/pubctl invite`. Paste the HTTPS link into Manyverse under **Connections → Paste invite code**. Each link can enroll one SSB identity.",
+  "changelog": "Add a web dashboard for the pub profile and invitations. Sign in through Manyverse or use an optional administrator password.",
+  "postInstallMessage": "Open the app’s **Web Terminal** and run `/app/code/pubctl admin`. Paste your public Manyverse SSB ID. Open the app, choose **Admin sign-in**, and approve with Manyverse. The **Pub settings** page lets you edit the profile and create invitations. For a password fallback, run `/app/code/pubctl password` in the Web Terminal.",
   "tags": [
     "sync",
     "hosting"
@@ -40,6 +41,8 @@
   "packagerUrl": "https://github.com/patattzel",
   "iconUrl": "https://raw.githubusercontent.com/patattzel/ssb-pub/main/assets/icon.png",
   "mediaLinks": [
-    "https://raw.githubusercontent.com/patattzel/ssb-pub/main/assets/invite.png"
-  ]
+    "https://raw.githubusercontent.com/patattzel/ssb-pub/cloudron-v0.2.0/assets/pub-invite.png",
+    "https://raw.githubusercontent.com/patattzel/ssb-pub/cloudron-v0.2.0/assets/pub-admin.png"
+  ],
+  "configurePath": "/admin"
 }

@@ -35,6 +35,8 @@ start
 status=$(docker exec "$name" /app/code/pubctl status)
 printf '%s\n' "$status" | grep -q '^wss://pub\.example\.com~shs:'
 docker exec "$name" /app/code/pubctl invite | grep -q '^https://pub\.example\.com/invite?token='
+docker exec "$name" sh -c 'test -s /app/data/ssb-pub/admin.sqlite && test -s /app/code/web/dm-sans.woff2'
+docker exec "$name" node -e 'fetch("http://127.0.0.1:3000/admin", {redirect:"manual"}).then(r => process.exit(r.status === 303 && r.headers.get("location") === "/login?ssb-http-auth=1" ? 0 : 1), () => process.exit(1))'
 docker exec "$name" sh -c '! grep -qsE ":1F48 .* 0A " /proc/net/tcp /proc/net/tcp6'
 stop
 

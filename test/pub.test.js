@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const { spawn, execFile } = require('node:child_process')
 const { once } = require('node:events')
 const { mkdtemp, rm } = require('node:fs/promises')
+const http = require('node:http')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
@@ -76,8 +77,22 @@ for (const tcp of [false, true]) {
         assert.deepEqual(await finished, [0, null])
       }
 
-      const pubctl = async (command) => (await exec(process.execPath, ['pubctl.js', command],
+      const pubctl = async (...args) => (await exec(process.execPath, ['pubctl.js', ...args],
         { cwd: source, env })).stdout.trim()
+
+      async function setPassword(password) {
+        return new Promise((resolve, reject) => {
+          const request = http.request({
+            socketPath: env.PUB_ADMIN_SOCKET, path: '/password', method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }, (response) => {
+            response.resume()
+            response.on('end', () => resolve(response.statusCode))
+          })
+          request.on('error', reject)
+          request.end(JSON.stringify({ password }))
+        })
+      }
 
       async function client(name) {
         const peer = createPeer({
@@ -94,6 +109,7 @@ for (const tcp of [false, true]) {
         }, { plugins: [
           require('ssb-replication-scheduler'),
           require('ssb-http-invite-client'),
+          require('ssb-http-auth-client'),
         ] })
         activePeers.add(peer)
         await once(peer, 'multiserver:listening')
@@ -116,6 +132,71 @@ for (const tcp of [false, true]) {
       const address = status.split('\n')[1]
       const alice = await client('alice')
       await assert.rejects(call(alice.connect, address))
+      if (!tcp) {
+        const admin = await client('admin')
+        await pubctl('admin', admin.id)
+        const initial = await fetch(origin + '/admin', { redirect: 'manual' })
+        assert.equal(initial.status, 303)
+        const login = await fetch(origin + initial.headers.get('location'))
+        const browser = login.headers.get('set-cookie').split(';')[0]
+        const markup = await login.text()
+        const uri = markup.match(/href="(ssb:experimental[^"]+)"/)[1].replaceAll('&amp;', '&')
+        const sc = new URL(uri).searchParams.get('sc')
+        const approval = await fetch(origin + '/login/events?' + new URLSearchParams({ sc }), {
+          headers: { cookie: browser },
+        })
+        assert.equal(approval.status, 200)
+        assert.equal(await call(admin.httpAuthClient.consumeSignInSsbUri, uri), true)
+        assert.match(await approval.text(), /event: approved/)
+        const post = (pathname, cookie, body, requestOrigin = origin) => fetch(origin + pathname, {
+          method: 'POST', body, redirect: 'manual',
+          headers: { origin: requestOrigin, ...(cookie && { cookie }) },
+        })
+        const finish = () => new URLSearchParams({ sc })
+        assert.equal((await post('/login/complete', null, finish())).status, 403)
+        const signedIn = await post('/login/complete', browser, finish())
+        assert.equal(signedIn.status, 303)
+        const session = signedIn.headers.get('set-cookie').split(';')[0]
+        assert.equal((await post('/login/complete', browser, finish())).status, 403)
+        assert.equal((await post('/admin/invite', session, null, 'https://other.example')).status, 403)
+        const adminPanel = await fetch(origin + '/admin', { headers: { cookie: session } })
+        assert.match(await adminPanel.text(), /Pub settings/)
+
+        const cc = admin.httpAuthClientTokens.create()
+        const appLogin = await fetch(origin + '/login?' + new URLSearchParams({
+          'ssb-http-auth': '1', cid: admin.id, cc,
+        }), { redirect: 'manual' })
+        assert.equal(appLogin.status, 303)
+        assert.equal(appLogin.headers.get('location'), '/admin')
+
+        const profile = (image) => {
+          const form = new FormData()
+          form.set('name', 'Test Pub <script>')
+          form.set('description', 'An independently hosted pub.')
+          form.set('image', image, 'profile.png')
+          return form
+        }
+        assert.equal((await post('/admin/profile', session, profile(new Blob(['fake'])))).status, 400)
+        const icon = await fetch(origin + '/assets/icon.png')
+        assert.equal((await post('/admin/profile', session, profile(await icon.blob()))).status, 303)
+        const landing = await (await fetch(origin)).text()
+        assert.match(landing, /Test Pub &lt;script&gt;/)
+        const imageURL = landing.match(/src="(\/profile-image\/[a-f0-9]{64})"/)[1]
+        assert.equal((await fetch(origin + imageURL)).headers.get('content-type'), 'image/webp')
+        assert.match(await (await post('/admin/invite', session)).text(), /New invitation/)
+
+        const password = 'test password with more than 12 characters'
+        assert.equal(await setPassword(password), 200)
+        assert.equal((await post('/admin/invite', session)).status, 403)
+        assert.equal((await post('/login/password', null, new URLSearchParams({ password: 'invalid' }))).status, 403)
+        const passwordLogin = await post('/login/password', null, new URLSearchParams({ password }))
+        assert.equal(passwordLogin.status, 303)
+        const fallbackSession = passwordLogin.headers.get('set-cookie').split(';')[0]
+        const transport = await call(admin.conn.connect, address)
+        assert.equal(await call(transport.httpAuth.invalidateAllSolutions), true)
+        assert.equal((await post('/admin/invite', fallbackSession)).status, 403)
+        await closePeer(admin)
+      }
       const invite = await pubctl('invite')
       assert.equal(await call(alice.httpInviteClient.claim, invite), address)
       const publisher = await call(alice.connect, address)
@@ -154,6 +235,7 @@ for (const tcp of [false, true]) {
       await stop()
       await start()
       assert.equal(await pubctl('status'), status)
+      if (!tcp) assert.match(await (await fetch(origin)).text(), /Test Pub &lt;script&gt;/)
       const charlie = await client('charlie')
       await assert.rejects(call(charlie.httpInviteClient.claim, invite), /already claimed/)
       assert.equal(await call(charlie.httpInviteClient.claim, await pubctl('invite')), address)

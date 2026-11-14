@@ -11,6 +11,9 @@ const ref = require('ssb-ref')
 const createPeer = require('./peer')
 const openInvites = require('./invites')
 const loadConfig = require('./config')
+const openAuth = require('./web/auth')
+const pubProfile = require('./web/profile')
+const webRoutes = require('./web/routes')
 
 function json(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json' })
@@ -51,11 +54,6 @@ function loadKeys(dir) {
   }
 }
 
-function page(res, title, text) {
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-  res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><h1>${title}</h1><p>${text}</p></html>`)
-}
-
 async function run() {
   const config = loadConfig()
   process.umask(0o077)
@@ -69,7 +67,13 @@ async function run() {
   const identity = loadKeys(config.data)
   const address = config.transport + '~shs:' + identity.public.slice(0, -8)
   const invites = openInvites(path.join(config.data, 'invites.sqlite'))
+  const auth = openAuth(path.join(config.data, 'admin.sqlite'), config, identity.id)
   const postTo = new URL('/claim', config.origin).href
+  const inviteURL = (token = invites.create()) => {
+    const url = new URL('/invite', config.origin)
+    url.searchParams.set('token', token)
+    return url.href
+  }
   let ready = false
   let shuttingDown = false
   let followQueue = Promise.resolve()
@@ -77,24 +81,25 @@ async function run() {
 
   const web = http.createServer({ requestTimeout: 15000, headersTimeout: 10000 }, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
-    res.setHeader('Referrer-Policy', 'no-referrer')
+    res.setHeader('Referrer-Policy', 'same-origin')
     res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Content-Security-Policy',
+      "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
     try {
       const url = new URL(req.url, config.origin)
       if (req.method === 'GET' && url.pathname === '/healthz') {
         res.writeHead(ready ? 204 : 503).end()
-      } else if (req.method === 'GET' && url.pathname === '/') {
-        page(res, 'SSB Pub', 'To connect, ask the operator for an invitation and paste it under Connections in Manyverse.')
       } else if (!ready) {
         res.writeHead(503).end()
       } else if (req.method === 'GET' && url.pathname === '/invite') {
+        res.setHeader('Referrer-Policy', 'no-referrer')
         const token = url.searchParams.get('token')
         const invite = invites.get(token)
-        if (!invite) return claimError(res, 'Invitation is invalid or expired')
         if (url.searchParams.get('encoding') === 'json') {
+          if (!invite) return claimError(res, 'Invitation is invalid or expired')
           return json(res, 200, { status: 'successful', invite: token, postTo })
         }
-        page(res, 'Join this SSB Pub', 'Copy this page’s URL and paste it under Connections in Manyverse.')
+        routes.invitation(req, res, invite && token, postTo)
       } else if (req.method === 'POST' && url.pathname === '/claim') {
         const body = await readClaim(req)
         if (!isClassicFeed(body?.id) || body.id === identity.id) return claimError(res, 'Invalid SSB feed ID')
@@ -107,7 +112,7 @@ async function run() {
         followQueue = result.catch(() => {})
         await result
         json(res, 200, { status: 'successful', multiserverAddress: address })
-      } else {
+      } else if (!await routes.handle(req, res, url)) {
         res.writeHead(404).end()
       }
     } catch (err) {
@@ -116,21 +121,41 @@ async function run() {
       res.end()
     }
   })
-  admin.on('request', (req, res) => {
+  admin.on('request', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
     if (!ready) return res.writeHead(503).end()
     if (req.method === 'GET' && req.url === '/status') {
       return json(res, 200, { id: identity.id, address })
     }
-    if (req.method === 'POST' && req.url === '/invite') {
-      try {
-        const url = new URL('/invite', config.origin)
-        url.searchParams.set('token', invites.create())
-        return json(res, 201, { url: url.href })
-      } catch (err) {
-        console.error('Create invitation failed:', err.message)
-        return res.writeHead(500).end()
+    try {
+      if (req.method === 'POST' && req.url === '/invite') {
+        return json(res, 201, { url: inviteURL() })
       }
+      if (req.method === 'POST' && req.url === '/admin') {
+        const body = await readClaim(req)
+        if (!isClassicFeed(body?.id) || body.id === identity.id) {
+          return json(res, 400, { error: 'Use your public Manyverse SSB ID (@….ed25519).' })
+        }
+        const previous = auth.changeAdmin(body.id)
+        if (previous && previous !== body.id) {
+          for (const rpc of [...(peer.peers[previous] || [])]) rpc.close(true)
+        }
+        return json(res, 200, { message: 'Administrator set. Open ' + config.origin.origin + '/admin' })
+      }
+      if (req.method === 'POST' && req.url === '/password') {
+        const body = await readClaim(req)
+        if (!ready) return res.writeHead(503).end()
+        if (typeof body?.password !== 'string' || body.password.length < 12 || body.password.length > 256) {
+          return json(res, 400, { error: 'Use a password of 12 to 256 characters.' })
+        }
+        if (!await auth.changePassword(body.password)) {
+          return json(res, 409, { error: 'Set the administrator first with pubctl admin.' })
+        }
+        return json(res, 200, { message: 'Admin password set. Existing web sessions were signed out.' })
+      }
+    } catch (err) {
+      console.error('Admin request failed:', err.message)
+      return res.writeHead(500).end()
     }
     res.writeHead(404).end()
   })
@@ -151,7 +176,9 @@ async function run() {
     friends: { hops: 1, hookAuth: false },
     conn: { autostart: false },
     connections: { incoming, outgoing: { net: [{ transform: 'shs' }], ws: [{ transform: 'shs' }] } },
-  }, { pub: true })
+  }, { pub: true, adminId: auth.adminId, plugins: [auth.plugin, require('ssb-about-self')] })
+  const profile = pubProfile(peer, config.data)
+  const routes = webRoutes({ config, auth, profile, peer, address, inviteURL })
 
   const isFollowing = promisify(peer.friends.isFollowing)
   const isBlocking = promisify(peer.friends.isBlocking)
@@ -173,11 +200,14 @@ async function run() {
     shuttingDown = true
     ready = false
     admin.close()
+    auth.stop()
     const deadline = setTimeout(() => process.exit(1), 12_000)
     try {
       await followQueue
+      await profile.idle()
       await promisify(peer.close)(true)
       invites.close()
+      auth.close()
       clearTimeout(deadline)
       process.exit(0)
     } catch (err) {
@@ -195,6 +225,7 @@ async function run() {
   await once(peer, 'multiserver:listening')
   clearTimeout(startupTimeout)
   await drain('contacts')
+  await drain('aboutSelf')
   if (shuttingDown) return
   ready = true
   console.log('SSB Pub ready at', address)

@@ -8,3 +8,7 @@
 !pubctl.js
 !pubctl
 !start.sh
+!web
+!web/**
+!assets
+!assets/icon.png

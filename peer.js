@@ -8,12 +8,18 @@ const pull = require('pull-stream')
 const pubAccess = {
   name: 'pubAccess',
   version: '1.0.0',
-  init(ssb) {
+  init(ssb, options) {
     ssb.auth.hook(function (next, [id, cb]) {
       if (id === ssb.id) return next.call(this, id, cb)
       const peer = { source: ssb.id, dest: id }
       ssb.friends.isFollowing(peer, (err, following) => {
-        if (err || !following) return cb(err || new Error('An invitation is required'))
+        if (err) return cb(err)
+        if (!following) {
+          if (options.adminId?.() === id) {
+            return cb(null, { allow: ['manifest', 'httpAuth.sendSolution', 'httpAuth.invalidateAllSolutions'] })
+          }
+          return cb(new Error('An invitation is required'))
+        }
         ssb.friends.isBlocking(peer, (error, blocked) => {
           if (error || blocked) return cb(error || new Error('Peer is blocked'))
           cb(null, null)
@@ -40,7 +46,7 @@ const pubReplication = {
 }
 
 // The classic feed, blob store and EBT components are the same as in Manyverse.
-module.exports = function createPeer(options, { pub = false, plugins = [] } = {}) {
+module.exports = function createPeer(options, { pub = false, adminId, plugins = [] } = {}) {
   const stack = SecretStack({ caps })
     .use(require('ssb-master'))
     .use(require('ssb-db2'))
@@ -61,5 +67,5 @@ module.exports = function createPeer(options, { pub = false, plugins = [] } = {}
 
   if (pub) stack.use(pubAccess).use(pubReplication)
   for (const plugin of plugins) stack.use(plugin)
-  return stack(options)
+  return stack({ ...options, adminId })
 }

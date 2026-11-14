@@ -52,7 +52,16 @@ cloudron login my.example.com
 cloudron install --location pub.example.com --port-bindings SSB_PORT=x --versions-url https://raw.githubusercontent.com/patattzel/ssb-pub/main/CloudronVersions.json
 ```
 
-In the app’s **Web Terminal**, run `/app/code/pubctl invite`. For TCP, enable the **Direct SSB TCP** port on Cloudron or install with `--port-bindings SSB_PORT=18008` using a free port. Use a DNS-only record for a TCP endpoint behind Cloudflare.
+For TCP, enable the **Direct SSB TCP** port on Cloudron or install with `--port-bindings SSB_PORT=18008` using a free port. Use a DNS-only record for a TCP endpoint behind Cloudflare.
+
+## Admin sign-in
+
+1. Copy your public SSB ID from your Manyverse profile. It starts with `@` and ends with `.ed25519`.
+2. In Cloudron’s **Web Terminal**, run `/app/code/pubctl admin` and paste the ID. With Compose, run `docker compose exec pub /app/code/pubctl admin`.
+3. Open the pub, choose **Admin sign-in → Open Manyverse**, and approve the login in Manyverse. To sign in using a phone, open **Use Manyverse on another device** and scan the QR code. Keep the original browser open.
+4. Under **Pub settings**, change the name, description and image or create an invite. Saving the profile publishes a signed SSB `about` message and stores the image as an SSB blob, so peers replicating the pub’s feed can see the profile in Manyverse.
+
+To enable or reset the password fallback, run `/app/code/pubctl password` in the same terminal. **Admin sign-in** then offers a password form. Resetting the password signs out existing web sessions. Running `pubctl admin` with a different ID replaces the administrator, clears the fallback password and signs out old sessions. Upgrading from 0.1.0 keeps the existing pub identity, replicated data and invitations.
 
 ### Publish a Community App
 
@@ -67,8 +76,8 @@ Commit and push the updated `CloudronVersions.json` to `main`.
 
 ## Data and backups
 
-The Compose volume `pub-data` keeps the pub identity, feeds, blobs, EBT state and invite database across rebuilds. Cloudron keeps these under `/app/data/ssb-pub` and uses SQLite-aware backups for the invitation database. For a consistent filesystem snapshot of the full data directory, stop the pub before copying. Keep the directory together when restoring, and keep backups private because they include the identity key.
+The Compose volume `pub-data` keeps the pub identity, feeds, blobs, EBT state, invitations and admin credentials across rebuilds. Cloudron keeps these under `/app/data/ssb-pub` and uses SQLite-aware backups for invitations and admin settings. For a consistent filesystem snapshot of the full data directory, stop the pub before copying. Keep the directory together when restoring, and keep backups private because they include the identity key.
 
 ## Development
 
-Use Node.js 24, then run `npm ci` and `npm test`. The integration tests use the Manyverse HTTP invite client and replication scheduler. They exercise invitation claim, joining via WebSocket and TCP, EBT feed replication, blob retrieval and persistence across a restart.
+Use Node.js 24, then run `npm ci` and `npm test`. The integration tests use the Manyverse HTTP auth and invite clients and replication scheduler. They exercise admin sign-in, profile editing, invitation claim, joining via WebSocket and TCP, EBT feed replication, blob retrieval and persistence across a restart.
