@@ -1,0 +1,1 @@
+The Scuttlebutt icon comes from [go-ssb-room](https://github.com/ssbc/go-ssb-room), copyright 2021 The NGI Pointer Secure-Scuttlebutt Team of 2020/2021. It is used under the [CC BY 4.0 license](CC-BY-4.0.txt). The other files in this repository use the [project license](../LICENSE) unless marked otherwise.

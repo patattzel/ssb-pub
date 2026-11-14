@@ -21,12 +21,25 @@
   "addons": {
     "localstorage": {
       "sqlite": {
-        "paths": ["/app/data/ssb-pub/invites.sqlite"]
+        "paths": [
+          "/app/data/ssb-pub/invites.sqlite"
+        ]
       }
     }
   },
   "website": "https://scuttlebutt.nz/",
   "changelog": "First release with invitation links, classic feed and blob replication, secure WebSockets and optional direct TCP.",
   "postInstallMessage": "Open the app’s **Web Terminal** and run `/app/code/pubctl invite`. Paste the HTTPS link into Manyverse under **Connections → Paste invite code**. Each link can enroll one SSB identity.",
-  "tags": ["sync", "hosting"]
+  "tags": [
+    "sync",
+    "hosting"
+  ],
+  "packageUrl": "https://github.com/patattzel/ssb-pub",
+  "documentationUrl": "https://github.com/patattzel/ssb-pub#cloudron-10",
+  "packagerName": "patattzel",
+  "packagerUrl": "https://github.com/patattzel",
+  "iconUrl": "https://raw.githubusercontent.com/patattzel/ssb-pub/main/assets/icon.png",
+  "mediaLinks": [
+    "https://raw.githubusercontent.com/patattzel/ssb-pub/main/assets/invite.png"
+  ]
 }
