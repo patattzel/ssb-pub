@@ -80,13 +80,17 @@ The Compose volume `pub-data` keeps the pub identity, feeds, blobs, EBT state, i
 
 ### Recover an update blocked by the SQLite backup
 
-If an installed 0.1.0 or 0.2.0 app reports `Cannot find module '/app/code/sqlite3'` before an update, use the Cloudron CLI to replace the running image. Repair restarts the app with the same data and installs the image that Cloudron needs for the backup. Then apply the catalog update with the usual pre-update backup. Replace the two example domains with your dashboard and pub domains.
+If an installed 0.1.0 or 0.2.0 app reports `Cannot find module '/app/code/sqlite3'` before an update, use the Cloudron CLI to replace the running image. Repair restarts the app with the same data and installs the image that Cloudron needs for the backup. Use the same digest as the catalog entry so Cloudron retains the image when it replaces the container. Then apply the catalog update with the usual pre-update backup. Replace the two example domains with your dashboard and pub domains.
 
 ```sh
 cloudron login my.example.com
-cloudron repair --app pub.example.com --image ghcr.io/patattzel/ssb-pub:0.2.1
-cloudron update --app pub.example.com --versions-url https://raw.githubusercontent.com/patattzel/ssb-pub/main/CloudronVersions.json
+versions_url=https://raw.githubusercontent.com/patattzel/ssb-pub/main/CloudronVersions.json
+image=$(curl -fsS "$versions_url" | jq -er '.versions["0.2.1"].manifest.dockerImage')
+cloudron repair --app pub.example.com --image "$image"
+cloudron update --app pub.example.com --versions-url "$versions_url"
 ```
+
+If a previous attempt repaired the app by tag and the update now reports `No such image` for the catalog digest, pull that exact digest with `sudo docker pull "$image"` on the Cloudron host. Then open the app's **Repair** page and retry the failed task.
 
 ## Development
 
