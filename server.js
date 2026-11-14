@@ -227,6 +227,10 @@ async function run() {
   await drain('contacts')
   await drain('aboutSelf')
   if (shuttingDown) return
+  await profile.migrateImage().catch((err) => {
+    console.error('Profile image migration failed:', err.message)
+  })
+  if (shuttingDown) return
   ready = true
   console.log('SSB Pub ready at', address)
 }

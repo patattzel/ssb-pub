@@ -12,6 +12,7 @@ const { setTimeout: sleep } = require('node:timers/promises')
 const { promisify } = require('node:util')
 const test = require('node:test')
 const keys = require('ssb-keys')
+const pull = require('pull-stream')
 const createPeer = require('../peer')
 
 const exec = promisify(execFile)
@@ -110,6 +111,7 @@ for (const tcp of [false, true]) {
           require('ssb-replication-scheduler'),
           require('ssb-http-invite-client'),
           require('ssb-http-auth-client'),
+          require('ssb-about-self'),
         ] })
         activePeers.add(peer)
         await once(peer, 'multiserver:listening')
@@ -182,7 +184,7 @@ for (const tcp of [false, true]) {
         const landing = await (await fetch(origin)).text()
         assert.match(landing, /Test Pub &lt;script&gt;/)
         const imageURL = landing.match(/src="(\/profile-image\/[a-f0-9]{64})"/)[1]
-        assert.equal((await fetch(origin + imageURL)).headers.get('content-type'), 'image/webp')
+        assert.equal((await fetch(origin + imageURL)).headers.get('content-type'), 'image/png')
         assert.match(await (await post('/admin/invite', session)).text(), /New invitation/)
 
         const password = 'test password with more than 12 characters'
@@ -199,9 +201,26 @@ for (const tcp of [false, true]) {
       }
       const invite = await pubctl('invite')
       assert.equal(await call(alice.httpInviteClient.claim, invite), address)
+      const pubId = status.split('\n')[0]
+      if (!tcp) alice.ebt.request(pubId, true)
       const publisher = await call(alice.connect, address)
-      assert.equal(publisher.id, status.split('\n')[0])
+      assert.equal(publisher.id, pubId)
       assert.match(address, tcp ? new RegExp(`^net:127.0.0.1:${tcpPort}~shs:`) : /^ws:\/\/127\.0\.0\.1:/)
+
+      if (!tcp) {
+        const profile = await until(async () => {
+          const profile = await call(alice.aboutSelf.get, pubId)
+          return profile.image && profile
+        }, 'replicated pub profile')
+        assert.equal(profile.name, 'Test Pub <script>')
+        assert.equal(profile.description, 'An independently hosted pub.')
+        await call(alice.blobs.want, profile.image)
+        const chunks = await new Promise((resolve, reject) => {
+          pull(alice.blobs.get(profile.image), pull.collect((err, chunks) => err ? reject(err) : resolve(chunks)))
+        })
+        assert.deepEqual(Buffer.concat(chunks).subarray(0, 8), Buffer.from('89504e470d0a1a0a', 'hex'))
+        alice.ebt.request(pubId, false)
+      }
 
       const post = await call(alice.db.publish, { type: 'post', text: 'Alice was here' })
       const blob = Buffer.from('Alice sent a blob')

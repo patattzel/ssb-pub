@@ -12,6 +12,10 @@ const icon = fs.readFileSync(path.join(__dirname, '../assets/icon.png'))
 const imageLimit = 4 * 1024 * 1024
 const defaultDescription = 'This Scuttlebutt pub keeps feeds available for invited peers, even when their authors are offline.'
 
+function encodeImage(input) {
+  return input.rotate().resize(512, 512, { fit: 'cover', withoutEnlargement: true }).png().toBuffer()
+}
+
 async function readProfile(req) {
   const values = Object.create(null)
   const chunks = []
@@ -65,7 +69,7 @@ async function readProfile(req) {
     })
     const { format } = await input.metadata()
     if (!['jpeg', 'png', 'webp'].includes(format)) throw new Error('Use a JPEG, PNG or WebP image')
-    image = await input.rotate().resize(512, 512, { fit: 'cover', withoutEnlargement: true }).webp().toBuffer()
+    image = await encodeImage(input)
   }
   return { name, description, image }
 }
@@ -83,40 +87,61 @@ module.exports = function pubProfile(peer, data) {
       image,
     }
   }
+  function readStoredImage(id) {
+    for (const format of ['png', 'webp']) {
+      try {
+        const data = fs.readFileSync(path.join(images, id + '.' + format))
+        return { data, type: 'image/' + format }
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err
+      }
+    }
+    return null
+  }
+
+  async function publish({ name, description, image }, authorize) {
+    if (!authorize()) throw new Error('Session expired')
+    const content = { type: 'about', about: peer.id, name, description }
+    if (image) {
+      const imageHash = createHash('sha256').update(image).digest('hex')
+      content.image = await new Promise((resolve, reject) => {
+        pull(pull.values([image]), peer.blobs.add((err, id) => err ? reject(err) : resolve(id)))
+      })
+      const filename = path.join(images, imageHash + '.png')
+      const temporary = filename + '.tmp'
+      fs.writeFileSync(temporary, image)
+      fs.renameSync(temporary, filename)
+    }
+    if (!authorize()) throw new Error('Session expired')
+    await promisify(peer.db.publish)(content)
+    await promisify(peer.db.onDrain)('aboutSelf')
+  }
+
   let queue = Promise.resolve()
+  function enqueue(task) {
+    const result = queue.then(task)
+    queue = result.catch(() => {})
+    return result
+  }
+
   return {
     get,
     idle: () => queue,
     readImage(id) {
-      if (id !== get().image) return null
-      try {
-        return fs.readFileSync(path.join(images, id + '.webp'))
-      } catch (err) {
-        if (err.code !== 'ENOENT') throw err
-        return null
-      }
+      return id === get().image ? readStoredImage(id) : null
+    },
+    migrateImage() {
+      return enqueue(async () => {
+        const { name, description, image } = get()
+        const stored = image && readStoredImage(image)
+        if (stored?.type !== 'image/webp') return
+        const png = await encodeImage(sharp(stored.data, { limitInputPixels: 512 * 512 }))
+        await publish({ name, description, image: png }, () => true)
+      })
     },
     async update(req, authorize) {
       const values = await readProfile(req)
-      const result = queue.then(async () => {
-        if (!authorize()) throw new Error('Session expired')
-        const content = { type: 'about', about: peer.id, name: values.name, description: values.description }
-        if (values.image) {
-          const imageHash = createHash('sha256').update(values.image).digest('hex')
-          content.image = await new Promise((resolve, reject) => {
-            pull(pull.values([values.image]), peer.blobs.add((err, id) => err ? reject(err) : resolve(id)))
-          })
-          const filename = path.join(images, imageHash + '.webp')
-          const temporary = filename + '.tmp'
-          fs.writeFileSync(temporary, values.image)
-          fs.renameSync(temporary, filename)
-        }
-        if (!authorize()) throw new Error('Session expired')
-        await promisify(peer.db.publish)(content)
-        await promisify(peer.db.onDrain)('aboutSelf')
-      })
-      queue = result.catch(() => {})
-      return result
+      return enqueue(() => publish(values, authorize))
     },
   }
 }

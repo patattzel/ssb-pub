@@ -117,7 +117,7 @@ module.exports = function webRoutes({ config, auth, profile, peer, address, invi
       }
       if (req.method === 'GET' && /^\/profile-image\/[a-f0-9]{64}$/.test(url.pathname)) {
         const image = profile.readImage(url.pathname.split('/').pop())
-        if (image) res.writeHead(200, { 'Content-Type': 'image/webp' }).end(image)
+        if (image) res.writeHead(200, { 'Content-Type': image.type }).end(image.data)
         else res.writeHead(404).end()
         return true
       }
