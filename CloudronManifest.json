@@ -3,7 +3,7 @@
   "title": "SSB Pub",
   "tagline": "Scuttlebutt feed replication for Manyverse",
   "description": "Run an invite-only Scuttlebutt Pub. It stores and replicates feeds and blobs using ssb-db2 and EBT.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "upstreamVersion": "8.1.0",
   "minBoxVersion": "10.0.0",
   "manifestVersion": 2,
@@ -29,7 +29,7 @@
     }
   },
   "website": "https://scuttlebutt.nz/",
-  "changelog": "Add a web dashboard for the pub profile and invitations. Sign in through Manyverse or use an optional administrator password.",
+  "changelog": "Fix Cloudron SQLite backups and restore database ownership at startup. Includes the web admin dashboard and Manyverse sign-in from 0.2.0.",
   "postInstallMessage": "Open the app’s **Web Terminal** and run `/app/code/pubctl admin`. Paste your public Manyverse SSB ID. Open the app, choose **Admin sign-in**, and approve with Manyverse. The **Pub settings** page lets you edit the profile and create invitations. For a password fallback, run `/app/code/pubctl password` in the Web Terminal.",
   "tags": [
     "sync",

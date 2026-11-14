@@ -78,6 +78,16 @@ Commit and push the updated `CloudronVersions.json` to `main`.
 
 The Compose volume `pub-data` keeps the pub identity, feeds, blobs, EBT state, invitations and admin credentials across rebuilds. Cloudron keeps these under `/app/data/ssb-pub` and uses SQLite-aware backups for invitations and admin settings. For a consistent filesystem snapshot of the full data directory, stop the pub before copying. Keep the directory together when restoring, and keep backups private because they include the identity key.
 
+### Recover an update blocked by the SQLite backup
+
+If an installed 0.1.0 or 0.2.0 app reports `Cannot find module '/app/code/sqlite3'` before an update, use the Cloudron CLI to replace the running image. Repair restarts the app with the same data and installs the image that Cloudron needs for the backup. Then apply the catalog update with the usual pre-update backup. Replace the two example domains with your dashboard and pub domains.
+
+```sh
+cloudron login my.example.com
+cloudron repair --app pub.example.com --image ghcr.io/patattzel/ssb-pub:0.2.1
+cloudron update --app pub.example.com --versions-url https://raw.githubusercontent.com/patattzel/ssb-pub/main/CloudronVersions.json
+```
+
 ## Development
 
 Use Node.js 24, then run `npm ci` and `npm test`. The integration tests use the Manyverse HTTP auth and invite clients and replication scheduler. They exercise admin sign-in, profile editing, invitation claim, joining via WebSocket and TCP, EBT feed replication, blob retrieval and persistence across a restart.
