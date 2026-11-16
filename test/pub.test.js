@@ -13,12 +13,55 @@ const { promisify } = require('node:util')
 const test = require('node:test')
 const keys = require('ssb-keys')
 const pull = require('pull-stream')
+const MultiServer = require('multiserver')
+const WebSocket = require('ws')
 const createPeer = require('../peer')
 
 const exec = promisify(execFile)
 const call = (fn, ...args) => new Promise((resolve, reject) => {
   fn(...args, (err, result) => err ? reject(err) : resolve(result))
 })
+const collect = (source) => call((cb) => pull(source, pull.collect(cb)))
+
+async function sendMalformedRpc(address, identity, { stream = false, length } = {}) {
+  const transport = address.startsWith('net:')
+    ? require('multiserver/plugins/net')({ scope: 'public' })
+    : require('multiserver/plugins/ws')({ scope: 'public' })
+  const shs = require('multiserver/plugins/shs')({
+    keys: {
+      publicKey: Buffer.from(identity.public.split('.')[0], 'base64'),
+      secretKey: Buffer.from(identity.private.split('.')[0], 'base64'),
+    },
+    appKey: require('ssb-caps').shs,
+    timeout: 5000,
+  })
+  const client = MultiServer([[transport, shs]])
+  const connection = await call(client.client, address)
+  const payload = Buffer.from(' null ')
+  const header = Buffer.alloc(9)
+  header[0] = stream ? 0b1010 : 0b0010
+  header.writeUInt32BE(length ?? payload.length, 1)
+  header.writeInt32BE(1, 5)
+  const input = Buffer.concat(length ? [header] : [header, payload])
+  let pending
+  const read = (abort, cb) => {
+    if (abort) {
+      if (pending) pending(abort)
+      cb(abort)
+    } else if (pending === undefined) {
+      pending = null
+      cb(null, input)
+    } else {
+      pending = cb
+    }
+  }
+  const ended = new Promise((resolve) => pull(connection.source, pull.drain(() => {}, resolve)))
+  pull(read, connection.sink)
+  const timedOut = Symbol('timed out')
+  const result = await Promise.race([ended, sleep(2000, timedOut, { ref: false })])
+  if (result === timedOut) connection.source(true, () => {})
+  assert.notEqual(result, timedOut, 'Malformed RPC did not disconnect: ' + JSON.stringify({ stream, length }))
+}
 
 async function freePort() {
   const server = net.createServer().listen(0, '127.0.0.1')
@@ -52,6 +95,7 @@ for (const tcp of [false, true]) {
         PUB_HTTP_PORT: String(port),
         PUB_DATA_DIR: path.join(temp, 'pub'),
         PUB_ADMIN_SOCKET: path.join(temp, 'admin.sock'),
+        PUB_TRUSTED_PROXY: '127.0.0.1',
         SSB_PORT: tcpPort,
         PUB_TCP_LISTEN_PORT: tcpPort,
         CLOUDRON: '',
@@ -134,41 +178,60 @@ for (const tcp of [false, true]) {
       const address = status.split('\n')[1]
       const alice = await client('alice')
       await assert.rejects(call(alice.connect, address))
+      let admin
+      let appLoginURL
       if (!tcp) {
-        const admin = await client('admin')
+        for (const data of ['text frame', Buffer.alloc(1024 * 1024 + 1)]) {
+          const socket = new WebSocket(address.split('~')[0])
+          await once(socket, 'open')
+          const closed = once(socket, 'close')
+          socket.send(data)
+          await closed
+          assert.equal((await fetch(origin + '/healthz')).status, 204)
+        }
+        admin = await client('admin')
         await pubctl('admin', admin.id)
         const initial = await fetch(origin + '/admin', { redirect: 'manual' })
         assert.equal(initial.status, 303)
+        for (let i = 0; i < 33; i++) {
+          await Promise.all(Array.from({ length: 32 }, async () => {
+            const response = await fetch(origin + '/login')
+            await response.arrayBuffer()
+          }))
+        }
         const login = await fetch(origin + initial.headers.get('location'))
         const browser = login.headers.get('set-cookie').split(';')[0]
         const markup = await login.text()
         const uri = markup.match(/href="(ssb:experimental[^"]+)"/)[1].replaceAll('&amp;', '&')
         const sc = new URL(uri).searchParams.get('sc')
-        const approval = await fetch(origin + '/login/events?' + new URLSearchParams({ sc }), {
-          headers: { cookie: browser },
-        })
-        assert.equal(approval.status, 200)
+        const approvalURL = origin + '/login/status?' + new URLSearchParams({ sc })
+        const checkApproval = () => fetch(approvalURL, { headers: { cookie: browser } })
+        assert.equal((await fetch(approvalURL)).status, 403)
+        assert.equal((await checkApproval()).status, 204)
         assert.equal(await call(admin.httpAuthClient.consumeSignInSsbUri, uri), true)
-        assert.match(await approval.text(), /event: approved/)
-        const post = (pathname, cookie, body, requestOrigin = origin) => fetch(origin + pathname, {
+        assert.equal((await checkApproval()).status, 200)
+        const post = (pathname, cookie, body, requestOrigin = origin, headers = {}) => fetch(origin + pathname, {
           method: 'POST', body, redirect: 'manual',
-          headers: { origin: requestOrigin, ...(cookie && { cookie }) },
+          headers: { origin: requestOrigin, ...(cookie && { cookie }), ...headers },
         })
         const finish = () => new URLSearchParams({ sc })
         assert.equal((await post('/login/complete', null, finish())).status, 403)
         const signedIn = await post('/login/complete', browser, finish())
         assert.equal(signedIn.status, 303)
         const session = signedIn.headers.get('set-cookie').split(';')[0]
+        assert.equal((await checkApproval()).status, 403)
         assert.equal((await post('/login/complete', browser, finish())).status, 403)
         assert.equal((await post('/admin/invite', session, null, 'https://other.example')).status, 403)
         const adminPanel = await fetch(origin + '/admin', { headers: { cookie: session } })
         assert.match(await adminPanel.text(), /Pub settings/)
 
         const cc = admin.httpAuthClientTokens.create()
-        const appLogin = await fetch(origin + '/login?' + new URLSearchParams({
+        appLoginURL = origin + '/login?' + new URLSearchParams({
           'ssb-http-auth': '1', cid: admin.id, cc,
-        }), { redirect: 'manual' })
-        assert.equal(appLogin.status, 303)
+        })
+        const appLoginResponses = await Promise.all([0, 1].map(() => fetch(appLoginURL, { redirect: 'manual' })))
+        assert.deepEqual(appLoginResponses.map((res) => res.status).sort(), [303, 403])
+        const appLogin = appLoginResponses.find((res) => res.status === 303)
         assert.equal(appLogin.headers.get('location'), '/admin')
 
         const profile = (image) => {
@@ -190,17 +253,33 @@ for (const tcp of [false, true]) {
         const password = 'test password with more than 12 characters'
         assert.equal(await setPassword(password), 200)
         assert.equal((await post('/admin/invite', session)).status, 403)
-        assert.equal((await post('/login/password', null, new URLSearchParams({ password: 'invalid' }))).status, 403)
-        const passwordLogin = await post('/login/password', null, new URLSearchParams({ password }))
+        const passwordPost = (secret, forwarded) => post('/login/password', null,
+          new URLSearchParams({ password: secret }), origin, { 'X-Forwarded-For': forwarded })
+        for (let i = 0; i < 12; i++) {
+          assert.equal((await passwordPost('invalid', `198.51.100.${i + 1}, 192.0.2.1`)).status, 403)
+        }
+        assert.equal((await passwordPost(password, '192.0.2.1')).status, 403)
+        const passwordLogin = await passwordPost(password, '192.0.2.2')
         assert.equal(passwordLogin.status, 303)
         const fallbackSession = passwordLogin.headers.get('set-cookie').split(';')[0]
         const transport = await call(admin.conn.connect, address)
         assert.equal(await call(transport.httpAuth.invalidateAllSolutions), true)
         assert.equal((await post('/admin/invite', fallbackSession)).status, 403)
-        await closePeer(admin)
       }
       const invite = await pubctl('invite')
-      assert.equal(await call(alice.httpInviteClient.claim, invite), address)
+      const badId = alice.id.slice(0, 43) + 'B' + alice.id.slice(44)
+      const rejected = await fetch(origin + '/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: badId, invite: new URL(invite).searchParams.get('token') }),
+      })
+      assert.equal((await rejected.json()).error, 'Invalid SSB feed ID')
+      const claims = await Promise.all([0, 1, 2].map(() => call(alice.httpInviteClient.claim, invite)))
+      assert.deepEqual(claims, [address, address, address])
+      for (const options of [{}, { stream: true }, { length: 8 * 1024 * 1024 + 1 }]) {
+        await sendMalformedRpc(address, alice.config.keys, options)
+        assert.equal((await fetch(origin + '/healthz')).status, 204)
+      }
       const pubId = status.split('\n')[0]
       if (!tcp) alice.ebt.request(pubId, true)
       const publisher = await call(alice.connect, address)
@@ -219,6 +298,10 @@ for (const tcp of [false, true]) {
           pull(alice.blobs.get(profile.image), pull.collect((err, chunks) => err ? reject(err) : resolve(chunks)))
         })
         assert.deepEqual(Buffer.concat(chunks).subarray(0, 8), Buffer.from('89504e470d0a1a0a', 'hex'))
+        const bytes = await collect(publisher.blobs.getSlice({ key: profile.image, start: 0, end: 8 }))
+        assert.deepEqual(Buffer.concat(bytes), Buffer.from('89504e470d0a1a0a', 'hex'))
+        await assert.rejects(collect(publisher.blobs.getSlice({ key: profile.image, start: 8, end: 1 })),
+          { message: 'Invalid blob range' })
         alice.ebt.request(pubId, false)
       }
 
@@ -254,7 +337,12 @@ for (const tcp of [false, true]) {
       await stop()
       await start()
       assert.equal(await pubctl('status'), status)
-      if (!tcp) assert.match(await (await fetch(origin)).text(), /Test Pub &lt;script&gt;/)
+      if (!tcp) {
+        assert.match(await (await fetch(origin)).text(), /Test Pub &lt;script&gt;/)
+        await call(admin.conn.connect, address)
+        assert.equal((await fetch(appLoginURL, { redirect: 'manual' })).status, 403)
+        await closePeer(admin)
+      }
       const charlie = await client('charlie')
       await assert.rejects(call(charlie.httpInviteClient.claim, invite), /already claimed/)
       assert.equal(await call(charlie.httpInviteClient.claim, await pubctl('invite')), address)

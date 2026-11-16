@@ -1,6 +1,7 @@
 'use strict'
 
-const { createHash, randomBytes, scrypt, timingSafeEqual } = require('node:crypto')
+const { createHash, createHmac, randomBytes, scrypt, timingSafeEqual } = require('node:crypto')
+const { isIP } = require('node:net')
 const { promisify } = require('node:util')
 const { DatabaseSync } = require('node:sqlite')
 const keys = require('ssb-keys')
@@ -13,6 +14,23 @@ const nonce = () => randomBytes(32).toString('base64')
 const digest = (value) => createHash('sha256').update(value).digest('hex')
 const validNonce = (value) => typeof value === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(value)
 const validToken = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value)
+
+function challengeTime(sc, now) {
+  if (!validNonce(sc)) return null
+  const bytes = Buffer.from(sc, 'base64')
+  const timestamp = bytes.readUIntBE(0, 6)
+  if (sc !== bytes.toString('base64') || timestamp > now || timestamp + challengeLifetime <= now) return null
+  return bytes.subarray(0, 10)
+}
+
+function clientAddress(req, proxyIP) {
+  const remote = req.socket.remoteAddress?.replace(/^::ffff:/, '')
+  if (proxyIP && remote === proxyIP) {
+    const forwarded = req.headers['x-forwarded-for']?.split(',').pop().trim()
+    if (isIP(forwarded)) return forwarded.replace(/^::ffff:/, '')
+  }
+  return remote
+}
 
 function verify(sid, cid, sc, cc, signature) {
   if (typeof signature !== 'string' || !/^[A-Za-z0-9+/]{86}==\.sig\.ed25519$/.test(signature)) return false
@@ -32,6 +50,9 @@ module.exports = function openAuth(filename, config, sid) {
       hash TEXT PRIMARY KEY,
       expires INTEGER NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS used_client_nonces (
+      hash TEXT PRIMARY KEY
+    ) STRICT;
   `)
   const lookup = db.prepare('SELECT feed, salt, password FROM admin WHERE row = 1')
   const setAdmin = db.prepare('INSERT INTO admin VALUES (1, ?, NULL, NULL) ON CONFLICT(row) DO UPDATE SET feed = excluded.feed, salt = NULL, password = NULL')
@@ -41,13 +62,23 @@ module.exports = function openAuth(filename, config, sid) {
   const removeSession = db.prepare('DELETE FROM sessions WHERE hash = ?')
   const pruneSessions = db.prepare('DELETE FROM sessions WHERE expires <= ?')
   const deleteSessions = db.prepare('DELETE FROM sessions')
-  const challenges = new Map()
+  const usedClientNonce = db.prepare('SELECT 1 FROM used_client_nonces WHERE hash = ?')
+  const useClientNonce = db.prepare('INSERT OR IGNORE INTO used_client_nonces VALUES (?)')
+  const pendingClientNonces = new Set()
+  const approvals = new Map()
   const events = new AbortController()
   const secure = config.origin.protocol === 'https:'
   const sessionName = secure ? '__Host-ssb-pub' : 'ssb-pub'
   const browserName = secure ? '__Host-ssb-pub-login' : 'ssb-pub-login'
+  let challengeKey = randomBytes(32)
   let windowStart = 0
-  let attempts = 0
+  let passwordChecks = 0
+  const attempts = new Map()
+
+  function challenge(browser, timestamp) {
+    const tag = createHmac('sha256', challengeKey).update(timestamp).update(browser).digest().subarray(0, 22)
+    return Buffer.concat([timestamp, tag]).toString('base64')
+  }
 
   function cookie(req, name) {
     for (const entry of (req.headers.cookie || '').split(';')) {
@@ -67,7 +98,9 @@ module.exports = function openAuth(filename, config, sid) {
 
   function invalidate() {
     deleteSessions.run()
-    challenges.clear()
+    challengeKey = randomBytes(32)
+    approvals.clear()
+    attempts.clear()
   }
 
   function saveCredentials(fn) {
@@ -103,17 +136,25 @@ module.exports = function openAuth(filename, config, sid) {
     hasPassword() {
       return Boolean(lookup.get()?.password)
     },
-    async checkPassword(password) {
+    async checkPassword(req, password) {
       const record = lookup.get()
       if (!record?.password || typeof password !== 'string' || password.length > 256) return false
       const now = Date.now()
       if (now - windowStart >= 60_000) {
         windowStart = now
-        attempts = 0
+        attempts.clear()
       }
-      if (attempts >= 12) return false
-      attempts++
-      const value = await derive(password, record.salt, 64)
+      const source = clientAddress(req, config.proxyIP)
+      const count = attempts.get(source) || 0
+      if (count >= 12 || passwordChecks >= 4 || (!count && attempts.size >= 4096)) return false
+      attempts.set(source, count + 1)
+      passwordChecks++
+      let value
+      try {
+        value = await derive(password, record.salt, 64)
+      } finally {
+        passwordChecks--
+      }
       if (events.signal.aborted) return false
       const current = lookup.get()
       const valid = current?.feed === record.feed && current.password === record.password &&
@@ -136,47 +177,50 @@ module.exports = function openAuth(filename, config, sid) {
       setCookie(res, sessionName, '', 0)
     },
     newChallenge(req, res) {
-      const now = Date.now()
-      for (const [sc, item] of challenges) {
-        if (item.expires <= now) challenges.delete(sc)
-      }
-      if (challenges.size >= 1024) return null
       const browser = cookie(req, browserName) || opaque()
       setCookie(res, browserName, browser, challengeLifetime)
-      const sc = nonce()
-      challenges.set(sc, { browser: digest(browser), expires: now + challengeLifetime })
-      return sc
+      const timestamp = randomBytes(10)
+      timestamp.writeUIntBE(Date.now(), 0, 6)
+      return challenge(browser, timestamp)
     },
     browserChallenge(req, sc) {
       const browser = cookie(req, browserName)
-      const item = challenges.get(sc)
-      if (!browser || !item || item.expires <= Date.now() || digest(browser) !== item.browser) return null
-      return item
+      const timestamp = challengeTime(sc, Date.now())
+      if (!browser || !timestamp || !timingSafeEqual(Buffer.from(sc), Buffer.from(challenge(browser, timestamp)))) return null
+      return approvals.get(sc)?.state ?? 'waiting'
     },
     complete(req, sc) {
-      const item = this.browserChallenge(req, sc)
-      if (!item?.signed || item.signed !== this.adminId()) return false
-      challenges.delete(sc)
+      if (this.browserChallenge(req, sc) !== 'approved') return false
+      approvals.get(sc).state = 'used'
       return true
     },
     async fromClient(peer, cid, cc) {
-      if (!validNonce(cc) || cid !== this.adminId()) return false
+      if (!validNonce(cc) || cc !== Buffer.from(cc, 'base64').toString('base64') || cid !== this.adminId()) return false
+      const nonceHash = digest(cc)
+      if (pendingClientNonces.size >= 16 || pendingClientNonces.has(nonceHash) || usedClientNonce.get(nonceHash)) return false
       const rpc = peer.peers[cid]?.find((connection) => !connection.closed)
       if (!rpc) return false
       const sc = nonce()
-      const signature = await new Promise((resolve) => {
-        const timeout = setTimeout(() => resolve(null), 8000)
-        try {
-          rpc.httpAuth.requestSolution(sc, cc, (err, value) => {
+      const currentKey = challengeKey
+      pendingClientNonces.add(nonceHash)
+      try {
+        const signature = await new Promise((resolve) => {
+          const timeout = setTimeout(() => resolve(null), 8000)
+          try {
+            rpc.httpAuth.requestSolution(sc, cc, (err, value) => {
+              clearTimeout(timeout)
+              resolve(err ? null : value)
+            })
+          } catch {
             clearTimeout(timeout)
-            resolve(err ? null : value)
-          })
-        } catch {
-          clearTimeout(timeout)
-          resolve(null)
-        }
-      })
-      return !events.signal.aborted && cid === this.adminId() && verify(sid, cid, sc, cc, signature)
+            resolve(null)
+          }
+        })
+        return !events.signal.aborted && currentKey === challengeKey && cid === this.adminId() &&
+          verify(sid, cid, sc, cc, signature) && useClientNonce.run(nonceHash).changes === 1
+      } finally {
+        pendingClientNonces.delete(nonceHash)
+      }
     },
     signal: events.signal,
     stop() {
@@ -193,13 +237,18 @@ module.exports = function openAuth(filename, config, sid) {
       init() {
         return {
           sendSolution(sc, cc, signature, cb) {
-            const item = typeof sc === 'string' && challenges.get(sc)
-            if (!item || item.expires <= Date.now() || item.signed ||
+            const now = Date.now()
+            const timestamp = challengeTime(sc, now)
+            if (!timestamp || approvals.has(sc) ||
                 this.id !== lookup.get()?.feed || !validNonce(cc) ||
                 !verify(sid, this.id, sc, cc, signature)) {
               return cb(new Error('Invalid or expired administrator login'))
             }
-            item.signed = this.id
+            for (const [nonce, approval] of approvals) {
+              if (approval.expires <= now) approvals.delete(nonce)
+            }
+            if (approvals.size >= 1024) return cb(new Error('Too many approved logins'))
+            approvals.set(sc, { expires: timestamp.readUIntBE(0, 6) + challengeLifetime, state: 'approved' })
             cb(null, true)
           },
           requestSolution(_sc, _cc, cb) {

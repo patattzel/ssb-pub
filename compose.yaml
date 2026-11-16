@@ -6,6 +6,7 @@ services:
     stop_grace_period: 20s
     environment:
       PUB_URL: "${PUB_URL:-http://127.0.0.1:3000}"
+      PUB_TRUSTED_PROXY: "${PUB_TRUSTED_PROXY:-}"
     ports:
       - "127.0.0.1:3000:3000"
     tmpfs:

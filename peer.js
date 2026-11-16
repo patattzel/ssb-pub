@@ -4,6 +4,7 @@ const SecretStack = require('secret-stack')
 const caps = require('ssb-caps')
 const websocket = require('multiserver/plugins/ws')
 const pull = require('pull-stream')
+const { pubWebsocket, pubShs } = require('./transport')
 
 const pubAccess = {
   name: 'pubAccess',
@@ -56,16 +57,16 @@ module.exports = function createPeer(options, { pub = false, adminId, plugins = 
     .use(require('ssb-friends'))
     .use(require('ssb-ebt'))
     .use(require('ssb-conn'))
-    .use(require('ssb-blobs'))
+    .use(pub ? require('./blobs') : require('ssb-blobs'))
     .use({
       name: 'websocketTransport',
       version: '1.0.0',
       init(ssb) {
-        ssb.multiserver.transport({ name: 'ws', create: (config) => websocket(config) })
+        ssb.multiserver.transport({ name: 'ws', create: pub ? pubWebsocket : websocket })
       },
     })
 
-  if (pub) stack.use(pubAccess).use(pubReplication)
+  if (pub) stack.use(pubShs).use(pubAccess).use(pubReplication)
   for (const plugin of plugins) stack.use(plugin)
   return stack({ ...options, adminId })
 }

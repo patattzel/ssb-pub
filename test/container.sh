@@ -3,6 +3,7 @@ set -eu
 
 image="$1"
 name="ssb-pub-test-$$"
+certs=$(mktemp -d)
 
 cleanup() {
   if [ "$?" -ne 0 ]; then docker logs "$name" >&2 || true; fi
@@ -10,12 +11,14 @@ cleanup() {
   docker rm "$name" >/dev/null 2>&1 || true
   docker volume rm "$name" >/dev/null 2>&1 || true
   docker volume rm "$name-backup" >/dev/null 2>&1 || true
+  rm -rf "$certs"
 }
 trap cleanup EXIT
 
 start() {
   docker run -d --platform linux/amd64 --name "$name" --read-only \
     --tmpfs /tmp --tmpfs /run --volume "$name:/app/data" \
+    --add-host pub.example.com:127.0.0.1 \
     -e CLOUDRON=1 -e CLOUDRON_APP_DOMAIN=pub.example.com "$@" "$image" >/dev/null
   tries=20
   until docker exec "$name" node -e 'fetch("http://127.0.0.1:3000/healthz").then(r => process.exit(r.status === 204 ? 0 : 1), () => process.exit(1))'; do
@@ -44,6 +47,12 @@ docker exec "$name" /app/code/pubctl invite | grep -q '^https://pub\.example\.co
 docker exec "$name" sh -c 'test -s /app/data/ssb-pub/admin.sqlite && test -s /app/code/web/dm-sans.woff2'
 docker exec "$name" node -e 'fetch("http://127.0.0.1:3000/admin", {redirect:"manual"}).then(r => process.exit(r.status === 303 && r.headers.get("location") === "/login?ssb-http-auth=1" ? 0 : 1), () => process.exit(1))'
 docker exec "$name" sh -c '! grep -qsE ":1F48 .* 0A " /proc/net/tcp /proc/net/tcp6'
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=pub.example.com \
+  -addext subjectAltName=DNS:pub.example.com -keyout "$certs/key.pem" -out "$certs/cert.pem" 2>/dev/null
+docker exec -i "$name" sh -c 'umask 077; cat > /tmp/ssb-test-key.pem' < "$certs/key.pem"
+docker exec -i "$name" sh -c 'cat > /tmp/ssb-test-cert.pem' < "$certs/cert.pem"
+docker exec -i -e NODE_EXTRA_CA_CERTS=/tmp/ssb-test-cert.pem "$name" \
+  timeout 45s node < "$(dirname "$0")/container-auth.fixture"
 invite=$(docker exec "$name" /app/code/pubctl invite)
 admin_id=$(docker exec "$name" node -p "require('ssb-keys').generate().id")
 docker exec "$name" /app/code/pubctl admin "$admin_id"

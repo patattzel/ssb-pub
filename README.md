@@ -22,6 +22,8 @@ pub.example.com {
 }
 ```
 
+If you enable password sign-in behind a Compose reverse proxy, set `PUB_TRUSTED_PROXY` to the proxy's source IP as seen by the container. The proxy must append or overwrite `X-Forwarded-For` with the connecting client's IP. Cloudron supplies its trusted proxy IP automatically.
+
 Paste the resulting link under **Connections → Paste invite code** in Manyverse. Each link can enroll one identity and expires after seven days. The same identity can retry during that time. The operator can show the pub ID and advertised address with `docker compose exec pub /app/code/pubctl status`.
 
 For a local check, run Compose without an `.env` and open `http://127.0.0.1:3000`. Use an HTTPS URL for Manyverse invitations.

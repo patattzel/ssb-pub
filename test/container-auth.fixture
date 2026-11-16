@@ -1,0 +1,151 @@
+'use strict'
+
+const assert = require('node:assert/strict')
+const { execFileSync } = require('node:child_process')
+const { randomBytes } = require('node:crypto')
+const { once } = require('node:events')
+const { mkdtemp, readFile, rm } = require('node:fs/promises')
+const http = require('node:http')
+const https = require('node:https')
+const keys = require('ssb-keys')
+const WebSocket = require('ws')
+const createPeer = require('./peer')
+
+const origin = 'https://pub.example.com'
+const call = (fn, ...args) => new Promise((resolve, reject) => {
+  fn(...args, (err, result) => err ? reject(err) : resolve(result))
+})
+const pubctl = (...args) => execFileSync('/app/code/pubctl', args, { encoding: 'utf8' }).trim()
+
+async function startProxy() {
+  const proxy = https.createServer({
+    key: await readFile('/tmp/ssb-test-key.pem'),
+    cert: await readFile('/tmp/ssb-test-cert.pem'),
+  }, (req, res) => {
+    const upstream = http.request({
+      host: '127.0.0.1', port: 3000, path: req.url, method: req.method, headers: req.headers,
+    }, (response) => {
+      res.writeHead(response.statusCode, response.headers)
+      response.pipe(res)
+    })
+    upstream.on('error', (err) => res.destroy(err))
+    req.pipe(upstream)
+  })
+  proxy.on('upgrade', (req, socket, head) => {
+    const upstream = http.get({
+      host: '127.0.0.1', port: 3000, path: req.url, headers: req.headers,
+    })
+    upstream.on('error', () => socket.destroy())
+    upstream.on('response', () => socket.destroy())
+    upstream.on('upgrade', (response, connection, pending) => {
+      socket.write('HTTP/1.1 101 Switching Protocols\r\n')
+      for (const [name, value] of Object.entries(response.headers)) socket.write(`${name}: ${value}\r\n`)
+      socket.write('\r\n')
+      socket.write(pending)
+      connection.write(head)
+      socket.on('error', () => connection.destroy())
+      connection.on('error', () => socket.destroy())
+      socket.pipe(connection).pipe(socket)
+    })
+  })
+  proxy.listen(443, '127.0.0.1')
+  await once(proxy, 'listening')
+  return proxy
+}
+
+async function run() {
+  const proxy = await startProxy()
+  const temp = await mkdtemp('/tmp/ssb-container-auth-')
+  const peers = []
+  async function client(name, identity, plugins = []) {
+    const peer = createPeer({
+      path: temp + '/' + name, keys: identity,
+      timers: { handshake: 5000, inactivity: 5000 },
+      friends: { hookAuth: false }, conn: { autostart: false },
+      connections: {
+        incoming: { net: [{ scope: 'device', host: '127.0.0.1', transform: 'shs' }] },
+        outgoing: { ws: [{ transform: 'shs' }] },
+      },
+    }, { plugins })
+    peers.push(peer)
+    await once(peer, 'multiserver:listening')
+    return peer
+  }
+
+  try {
+    const [sid, address] = pubctl('status').split('\n')
+    const ws = new WebSocket(origin.replace('https:', 'wss:'))
+    await once(ws, 'open')
+    const closed = once(ws, 'close')
+    ws.send('not a valid SHS message')
+    await closed
+    assert.equal((await fetch(origin + '/healthz')).status, 204)
+
+    const identity = keys.generate()
+    pubctl('admin', identity.id)
+    const cc = randomBytes(32).toString('base64')
+    const sign = (sc, nonce) => keys.sign(identity, `=http-auth-sign-in:${sid}:${identity.id}:${sc}:${nonce}`)
+    const admin = await client('admin', identity, [{
+      name: 'httpAuth',
+      version: '1.0.0',
+      manifest: { sendSolution: 'async', requestSolution: 'async' },
+      permissions: { anonymous: { allow: ['requestSolution'] } },
+      init() {
+        return {
+          requestSolution(sc, nonce, cb) {
+            if (nonce !== cc || this.id !== sid) return cb(new Error('Unexpected login request'))
+            cb(null, sign(sc, nonce))
+          },
+        }
+      },
+    }])
+    const login = await fetch(origin + '/login?ssb-http-auth=1')
+    const browserCookie = login.headers.get('set-cookie')
+    assert.match(browserCookie, /^__Host-ssb-pub-login=.*; Secure$/)
+    const uri = (await login.text()).match(/href="(ssb:experimental[^"]+)"/)[1].replaceAll('&amp;', '&')
+    const { searchParams } = new URL(uri)
+    assert.equal(searchParams.get('multiserverAddress'), address)
+    const sc = searchParams.get('sc')
+    const cookie = browserCookie.split(';')[0]
+    const rpc = await call(admin.connect, address)
+    const browserNonce = randomBytes(32).toString('base64')
+    assert.equal(await call(rpc.httpAuth.sendSolution, sc, browserNonce, sign(sc, browserNonce)), true)
+    const finish = await fetch(origin + '/login/complete', {
+      method: 'POST', redirect: 'manual', headers: { origin, cookie }, body: new URLSearchParams({ sc }),
+    })
+    assert.equal(finish.status, 303)
+    const session = finish.headers.get('set-cookie')
+    assert.match(session, /^__Host-ssb-pub=.*; Secure$/)
+    const appLogin = origin + '/login?' + new URLSearchParams({ 'ssb-http-auth': '1', cid: identity.id, cc })
+    assert.equal((await fetch(appLogin, { redirect: 'manual' })).status, 303)
+    assert.equal((await fetch(appLogin, { redirect: 'manual' })).status, 403)
+
+    const dashboard = await fetch(origin + '/admin/invite', {
+      method: 'POST', headers: { origin, cookie: session.split(';')[0] },
+    })
+    assert.equal(dashboard.status, 200)
+    const invite = new URL((await dashboard.text()).match(/id="invite-link" readonly value="([^"]+)"/)[1])
+    assert.equal(invite.origin, origin)
+    invite.searchParams.set('encoding', 'json')
+    const { invite: token, postTo } = await (await fetch(invite)).json()
+    const member = await client('member', keys.generate())
+    await assert.rejects(call(member.connect, address))
+    const claim = (id) => fetch(postTo, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, invite: token }),
+    }).then((res) => res.json())
+    assert.deepEqual(await claim(member.id), { status: 'successful', multiserverAddress: address })
+    assert.equal((await claim(keys.generate().id)).status, 'error')
+    assert.equal((await call(member.connect, address)).id, sid)
+    console.log('Cloudron HTTPS and WSS login and invitation checks passed')
+  } finally {
+    await Promise.all(peers.map((peer) => call(peer.close, true)))
+    proxy.closeAllConnections()
+    await call(proxy.close.bind(proxy))
+    await rm(temp, { recursive: true, force: true })
+  }
+}
+
+run().catch((err) => {
+  console.error(err)
+  process.exitCode = 1
+})

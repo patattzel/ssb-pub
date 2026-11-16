@@ -5,7 +5,7 @@ WORKDIR /app/code
 COPY package.json package-lock.json ./
 # Native dependencies ship N-API builds for Linux amd64 and arm64.
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
-COPY config.js invites.js peer.js server.js pubctl.js pubctl start.sh ./
+COPY blobs.js config.js invites.js peer.js transport.js server.js pubctl.js pubctl start.sh ./
 COPY web ./web
 COPY assets/icon.png ./assets/icon.png
 EXPOSE 3000 8008

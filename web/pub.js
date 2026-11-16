@@ -19,18 +19,17 @@ document.addEventListener('click', async (event) => {
 const login = document.querySelector('#finish-sign-in')
 if (login) {
   const status = document.querySelector('#login-status')
-  const events = new EventSource('/login/events?' + new URLSearchParams({ sc: login.dataset.sc }))
-  events.addEventListener('approved', () => {
-    events.close()
-    login.requestSubmit()
-  })
-  events.addEventListener('expired', () => {
-    events.close()
-    status.textContent = 'Sign-in expired. Reload this page to start again.'
-  })
-  events.onerror = () => {
-    if (events.readyState === EventSource.CLOSED) {
+  const url = '/login/status?' + new URLSearchParams({ sc: login.dataset.sc })
+  async function checkApproval() {
+    try {
+      const result = await fetch(url)
+      if (result.status === 200) login.requestSubmit()
+      else if (result.status === 204) setTimeout(checkApproval, 700)
+      else if (result.status === 403) status.textContent = 'Sign-in expired. Reload this page to start again.'
+      else throw new Error('Could not check sign-in')
+    } catch {
       status.textContent = 'Could not connect. Reload this page to start again.'
     }
   }
+  checkApproval()
 }

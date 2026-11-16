@@ -2,7 +2,6 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
-const { setTimeout: sleep } = require('node:timers/promises')
 const QRCode = require('qrcode')
 const views = require('./views')
 
@@ -41,34 +40,6 @@ async function form(req) {
     chunks.push(chunk)
   }
   return new URLSearchParams(Buffer.concat(chunks).toString())
-}
-
-async function streamEvents(req, res, auth, challenge) {
-  if (!auth.browserChallenge(req, challenge)) return res.writeHead(403).end()
-  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Accel-Buffering': 'no' })
-  res.write(': waiting\n\n')
-  const closed = new AbortController()
-  res.once('close', () => closed.abort())
-  const signal = AbortSignal.any([closed.signal, auth.signal])
-  let heartbeat = Date.now()
-  try {
-    while (!signal.aborted) {
-      const item = auth.browserChallenge(req, challenge)
-      if (!item || item.signed) {
-        res.end(`event: ${item ? 'approved' : 'expired'}\ndata: 1\n\n`)
-        return
-      }
-      if (Date.now() - heartbeat > 10_000) {
-        res.write(': waiting\n\n')
-        heartbeat = Date.now()
-      }
-      await sleep(400, undefined, { signal })
-    }
-  } catch (err) {
-    if (err.name !== 'AbortError') throw err
-  } finally {
-    res.end()
-  }
 }
 
 module.exports = function webRoutes({ config, auth, profile, peer, address, inviteURL }) {
@@ -131,6 +102,7 @@ module.exports = function webRoutes({ config, auth, profile, peer, address, invi
           html(res, views.publicPage(profile.get()))
           break
         case 'GET /login': {
+          res.setHeader('Referrer-Policy', 'strict-origin')
           if (auth.authenticated(req)) {
             redirect(res, '/admin')
             break
@@ -149,9 +121,11 @@ module.exports = function webRoutes({ config, auth, profile, peer, address, invi
           await login(req, res, url)
           break
         }
-        case 'GET /login/events':
-          await streamEvents(req, res, auth, url.searchParams.get('sc'))
+        case 'GET /login/status': {
+          const state = auth.browserChallenge(req, url.searchParams.get('sc'))
+          res.writeHead(state === 'approved' ? 200 : state === 'waiting' ? 204 : 403).end()
           break
+        }
         case 'POST /login/complete': {
           const values = await form(req)
           if (!auth.complete(req, values.get('sc'))) {
@@ -164,7 +138,7 @@ module.exports = function webRoutes({ config, auth, profile, peer, address, invi
         }
         case 'POST /login/password': {
           const values = await form(req)
-          if (!await auth.checkPassword(values.get('password'))) {
+          if (!await auth.checkPassword(req, values.get('password'))) {
             await login(req, res, null, 'Unable to sign in. Check the password or retry shortly.', 403)
             break
           }

@@ -37,7 +37,8 @@ async function readClaim(req) {
 }
 
 function isClassicFeed(id) {
-  return typeof id === 'string' && /^@[A-Za-z0-9+/]{43}=\.ed25519$/.test(id) &&
+  return typeof id === 'string' && id.length === 53 &&
+    /^@[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=\.ed25519$/.test(id) &&
     ref.isFeed(id)
 }
 
@@ -77,6 +78,7 @@ async function run() {
   let ready = false
   let shuttingDown = false
   let followQueue = Promise.resolve()
+  const pendingFollows = new Map()
   const claimError = (res, error) => json(res, 200, { status: 'error', error })
 
   const web = http.createServer({ requestTimeout: 15000, headersTimeout: 10000 }, async (req, res) => {
@@ -108,9 +110,7 @@ async function run() {
           return claimError(res, 'Invitation is invalid, expired or already claimed')
         }
         // Keep a token bound to the first identity across retries and restarts.
-        const result = followQueue.then(() => follow(body.id))
-        followQueue = result.catch(() => {})
-        await result
+        await queueFollow(body.id)
         json(res, 200, { status: 'successful', multiserverAddress: address })
       } else if (!await routes.handle(req, res, url)) {
         res.writeHead(404).end()
@@ -163,11 +163,10 @@ async function run() {
   await once(web, 'listening')
 
   const incoming = {
-    ws: [{ scope: 'public', transform: 'shs', server: web, external: config.origin.hostname,
-      verifyClient: ({ req }) => req.url === '/' }],
+    ws: [{ scope: 'public', transform: 'pub-shs', server: web, external: config.origin.hostname }],
   }
   if (config.tcpListenPort) {
-    incoming.net = [{ scope: 'public', transform: 'shs', host: '0.0.0.0', port: config.tcpListenPort }]
+    incoming.net = [{ scope: 'public', transform: 'pub-shs', host: '0.0.0.0', port: config.tcpListenPort }]
   }
   const peer = createPeer({
     path: config.data,
@@ -184,6 +183,15 @@ async function run() {
   const isBlocking = promisify(peer.friends.isBlocking)
   const publish = promisify(peer.db.publish)
   const drain = promisify(peer.db.onDrain)
+
+  function queueFollow(id) {
+    const pending = pendingFollows.get(id)
+    if (pending) return pending
+    const result = followQueue.then(() => follow(id)).finally(() => pendingFollows.delete(id))
+    followQueue = result.catch(() => {})
+    pendingFollows.set(id, result)
+    return result
+  }
 
   async function follow(id) {
     const relation = { source: peer.id, dest: id }

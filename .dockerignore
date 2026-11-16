@@ -1,9 +1,11 @@
 **
 !package.json
 !package-lock.json
+!blobs.js
 !config.js
 !invites.js
 !peer.js
+!transport.js
 !server.js
 !pubctl.js
 !pubctl

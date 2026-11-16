@@ -32,10 +32,13 @@ module.exports = function config(env = process.env) {
     : `${origin.protocol === 'https:' ? 'wss' : 'ws'}://${origin.host}`
 
   const data = cloudron ? '/app/data/ssb-pub' : path.resolve(env.PUB_DATA_DIR || './data')
+  const proxyIP = cloudron ? env.CLOUDRON_PROXY_IP : env.PUB_TRUSTED_PROXY
+  if (proxyIP && !isIP(proxyIP)) throw new Error('The trusted reverse proxy must be an IP address')
   return {
     origin,
     transport,
     data,
+    proxyIP: proxyIP?.replace(/^::ffff:/, ''),
     socket: cloudron ? '/run/ssb-pub/admin.sock' :
       env.PUB_ADMIN_SOCKET || path.join(data, 'admin.sock'),
     httpHost: env.PUB_HTTP_HOST || '127.0.0.1',
